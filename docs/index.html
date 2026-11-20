@@ -4,54 +4,69 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#103e50">
-  <title>Ocean Data Sharing CoP Global Community Map</title>
+  <meta name="description" content="Explore organisations participating in the Ocean Data Sharing Community of Practice.">
+  <title>Ocean Data Sharing CoP | Global Community Map</title>
+  <!-- Keep the locally hosted Leaflet stylesheet that already fixed your map tiles. -->
   <link rel="stylesheet" href="./leaflet.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.5.3/dist/MarkerCluster.css">
   <link rel="stylesheet" href="./style.css">
 </head>
 <body>
-  <header>
-    <div class="container">
-      <p class="eyebrow">Ocean Data Sharing · Community of Practice</p>
-      <h1>Global Community Map</h1>
-      <p class="intro">Explore participating organisations and their ocean data sharing interests. Each marker represents an organisation that has consented to appear on the map.</p>
+  <header class="site-header">
+    <div class="container header-content">
+      <div>
+        <p class="eyebrow">Ocean Data Sharing · Community of Practice</p>
+        <h1>Global Community Map</h1>
+      </div>
+      <p class="intro">Discover participating organisations and their interests in ocean data sharing.</p>
     </div>
   </header>
   <main class="container">
     <section class="toolbar" aria-label="Map filters">
       <div class="toolbar-item search-wrap">
         <label for="search">Search organisations</label>
-        <input id="search" type="search" placeholder="Name, country, data focus..." autocomplete="off">
+        <input id="search" type="search" placeholder="Organisation, country, data focus..." autocomplete="off">
       </div>
-      <div class="toolbar-item">
+      <div id="type-control" class="toolbar-item" hidden>
         <label id="type-label">Organisation type</label>
         <details class="type-picker" aria-labelledby="type-label">
           <summary id="type-summary">All organisation types</summary>
           <div id="type-checkboxes" class="type-checkboxes" role="group" aria-label="Organisation types"></div>
         </details>
       </div>
-      <div class="toolbar-item upload-wrap">
-        <label for="csv-upload">Optional: use local CSV</label>
-        <input id="csv-upload" type="file" accept=".csv,text/csv" aria-describedby="upload-help">
-        <small id="upload-help">Only displayed in your browser, not uploaded anywhere</small>
-      </div>
+      <button id="reset" type="button" class="reset-button">Clear filters</button>
     </section>
-    <div class="stat-row"><span id="count">Loading approved organisations…</span><span id="updated"></span></div>
+
+    <div class="stat-row" aria-live="polite">
+      <span id="count">Loading approved organisations…</span>
+      <span id="updated"></span>
+    </div>
     <div id="error" class="error" role="alert" hidden></div>
-    <section aria-label="Interactive global community map">
-      <div id="map"></div>
-      <p class="map-note">Prototype community map. Locations are approximate city-centre points only. Exact organisation coordinates are not displayed.</p>
+
+    <section class="map-section" aria-label="Interactive global community map">
+      <div id="map" role="application" aria-label="Map of participating organisations"></div>
+      <p class="map-note">Locations are approximate city-centre points and do not represent exact organisation addresses. Select a cluster to explore organisations in that area.</p>
     </section>
+
     <section aria-labelledby="directory-title" class="directory">
-      <div class="section-head"><h2 id="directory-title">Community directory</h2><button id="reset" type="button">Clear filters</button></div>
+      <div class="section-head">
+        <div>
+          <h2 id="directory-title">Community directory</h2>
+          <p>Browse the same organisations shown on the map. Search and filters apply to both views.</p>
+        </div>
+      </div>
       <div class="table-scroll">
         <table>
-          <thead><tr><th>Organisation</th><th>City</th><th>Country</th><th>Organisation type</th><th>Data focus</th><th>Tools/platforms</th><th>AI/data-sharing interests</th><th>Website</th></tr></thead>
+          <thead>
+            <tr><th>Organisation</th><th>City</th><th>Country</th><th>Organisation type</th><th>Data focus</th><th>Tools/platforms</th><th>AI/data-sharing interests</th><th>Website</th></tr>
+          </thead>
           <tbody id="directory-body"><tr><td colspan="8">Loading…</td></tr></tbody>
         </table>
       </div>
     </section>
   </main>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
   <script src="./map.js"></script>
 </body>
 </html>

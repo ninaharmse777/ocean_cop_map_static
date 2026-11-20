@@ -1,133 +1,152 @@
 'use strict';
-// Browser-only map. All public data must already have been consent-filtered by build_data.py.
-// Manual CSV upload is also filtered in the browser and never uploaded to a server.
-const map = L.map('map', {scrollWheelZoom: false}).setView([20, 0], 2);
+// The public feed is consent-filtered by scripts/build_data.py before deployment.
+const map = L.map('map', { scrollWheelZoom: false }).setView([18, 0], 2);
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
   maxZoom: 19
 }).addTo(map);
-const markerLayer = L.layerGroup().addTo(map);
-const E = (id) => document.getElementById(id);
+
+// If the marker-cluster CDN is blocked, show the regular markers rather than breaking the map.
+const markerLayer = typeof L.markerClusterGroup === 'function'
+  ? L.markerClusterGroup({
+      showCoverageOnHover: false,
+      spiderfyOnMaxZoom: true,
+      zoomToBoundsOnClick: true,
+      maxClusterRadius: 46,
+      iconCreateFunction: cluster => L.divIcon({
+        html: `<span>${cluster.getChildCount()}</span>`,
+        className: 'ocean-cluster', iconSize: [38,38], iconAnchor: [19,19]
+      })
+    })
+  : L.layerGroup();
+map.addLayer(markerLayer);
+
+const E = id => document.getElementById(id);
 let all = [];
+let hasFittedMap = false;
+const DIRECTORY_FIELDS = [
+  ['organisation', 'Organisation'], ['city', 'City'], ['country', 'Country'],
+  ['organisation_type', 'Organisation type'], ['data_focus', 'Data focus'],
+  ['tools_used', 'Tools/platforms'], ['ai_interests', 'AI/data-sharing interests'],
+  ['website', 'Website']
+];
 
 function clean(v) { return String(v ?? '').trim(); }
-function escapeHTML(v) { return clean(v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function escapeHTML(v) { return clean(v).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c])); }
 function safeWebURL(v) {
-  try { const u = new URL(clean(v)); return ['http:', 'https:'].includes(u.protocol) ? u.href : null; }
-  catch { return null; }
-}
-function validCoords(v) {
-  const latRaw = clean(v.map_latitude ?? v.latitude), lonRaw = clean(v.map_longitude ?? v.longitude);
-  if (!latRaw || !lonRaw) return false;
-  const lat = Number(latRaw), lon = Number(lonRaw);
-  return Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
-}
-const PUBLIC_FIELDS = ['organisation','website','city','country','organisation_type','data_focus','tools_used','ai_interests','public_profile'];
-function filterConsent(rows) {
-  return rows.map(raw => {
-    const r = Object.fromEntries(Object.entries(raw).map(([k,v]) => [clean(k).toLowerCase(), clean(v)]));
-    if (r.consent_map?.toLowerCase() !== 'yes' || r.show_on_map?.toLowerCase() !== 'yes' || !validCoords(r)) return null;
-    const o = Object.fromEntries(PUBLIC_FIELDS.map(k => [k, r[k] || '']));
-    o.map_latitude = Number(r.map_latitude ?? r.latitude);
-    o.map_longitude = Number(r.map_longitude ?? r.longitude);
-    o.public_contact = r.consent_contact?.toLowerCase() === 'yes' ? (r.public_contact || '') : '';
-    return o;
-  }).filter(Boolean);
+  try {
+    const url = new URL(clean(v));
+    return ['http:', 'https:'].includes(url.protocol) ? url.href : null;
+  } catch { return null; }
 }
 function popupHTML(r) {
-  let s = `<div class="popup"><h3>${escapeHTML(r.organisation)}</h3>`;
-  for (const [label,key] of [['Approximate location',null],['Organisation type','organisation_type'],['Data focus','data_focus'],['Tools/platforms used','tools_used'],['AI/data-sharing interests','ai_interests'],['Profile','public_profile']]) {
-    const value = key ? r[key] : [r.city,r.country].filter(Boolean).join(', ');
-    if (value) s += `<p><strong>${label}:</strong> ${escapeHTML(value)}</p>`;
+  let html = `<div class="popup"><h3>${escapeHTML(r.organisation)}</h3>`;
+  const fields = [
+    ['Approximate location', [r.city,r.country].filter(Boolean).join(', ')],
+    ['Organisation type',r.organisation_type], ['Data focus',r.data_focus],
+    ['Tools/platforms used',r.tools_used], ['AI/data-sharing interests',r.ai_interests],
+    ['Profile',r.public_profile]
+  ];
+  for (const [label, value] of fields) {
+    if (clean(value)) html += `<p><strong>${label}:</strong> ${escapeHTML(value)}</p>`;
   }
   const url = safeWebURL(r.website);
-  if (url) s += `<p><strong>Website:</strong> <a href="${escapeHTML(url)}" target="_blank" rel="noopener noreferrer">Open link</a></p>`;
-  if (r.public_contact) s += `<p><strong>Public contact:</strong> ${escapeHTML(r.public_contact)}</p>`;
-  return s + '</div>';
+  if (url) html += `<p><strong>Website:</strong> <a href="${escapeHTML(url)}" target="_blank" rel="noopener noreferrer">Open link</a></p>`;
+  // Public contact has already been restricted to consent_contact=Yes by build_data.py.
+  if (clean(r.public_contact)) html += `<p><strong>Public contact:</strong> ${escapeHTML(r.public_contact)}</p>`;
+  return html + '</div>';
 }
-function setData(records, label) {
+function setData(records, timestamp) {
   all = records;
-  const types = [...new Set(all.map(r=>clean(r.organisation_type)).filter(Boolean))].sort((a,b) => a.localeCompare(b));
-  const box = E('type-checkboxes');
-  box.replaceChildren();
+  const types = [...new Set(all.map(r => clean(r.organisation_type)).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  const checkboxes = E('type-checkboxes');
+  checkboxes.replaceChildren();
+  E('type-control').hidden = types.length === 0;
   for (const type of types) {
     const label = document.createElement('label');
-    const input = document.createElement('input');
-    input.type = 'checkbox'; input.value = type; input.checked = true;
-    input.addEventListener('change', render);
-    label.append(input, document.createTextNode(type));
-    box.append(label);
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox'; checkbox.value = type; checkbox.checked = true;
+    checkbox.addEventListener('change', render);
+    label.append(checkbox, document.createTextNode(type));
+    checkboxes.append(label);
   }
-  E('updated').textContent = label;
+  E('updated').textContent = timestamp;
   E('error').hidden = true;
   render();
+  if (!hasFittedMap && all.length) {
+    const bounds = L.latLngBounds(all.map(r => [Number(r.map_latitude),Number(r.map_longitude)]));
+    if (bounds.isValid()) { map.fitBounds(bounds.pad(0.13), { maxZoom:4, animate:false }); hasFittedMap = true; }
+  }
+  map.invalidateSize({ animate:false });
 }
 function render() {
-  const q = E('search').value.trim().toLowerCase();
-  const checked = [...E('type-checkboxes').querySelectorAll('input:checked')].map(e => e.value);
-  const totalTypes = E('type-checkboxes').querySelectorAll('input').length;
-  E('type-summary').textContent = checked.length === totalTypes ? 'All organisation types' : `${checked.length} of ${totalTypes} types selected`;
-  const rows = all.filter(r => (checked.includes(r.organisation_type) || (checked.length === totalTypes && !r.organisation_type)) && (!q ||
-    ['organisation','city','country','organisation_type','data_focus','tools_used','ai_interests','public_profile'].some(k => clean(r[k]).toLowerCase().includes(q))));
+  const query = E('search').value.trim().toLowerCase();
+  const boxes = [...E('type-checkboxes').querySelectorAll('input')];
+  const checked = boxes.filter(e => e.checked).map(e => e.value);
+  E('type-summary').textContent = checked.length === boxes.length
+    ? 'All organisation types' : `${checked.length} of ${boxes.length} types selected`;
+  const rows = all.filter(r =>
+    (!boxes.length || checked.includes(clean(r.organisation_type)) || (checked.length === boxes.length && !r.organisation_type)) &&
+    (!query || ['organisation','city','country','organisation_type','data_focus','tools_used','ai_interests','public_profile']
+      .some(k => clean(r[k]).toLowerCase().includes(query)))
+  );
   E('count').textContent = `${rows.length} of ${all.length} approved organisation${all.length===1?'':'s'} shown`;
   markerLayer.clearLayers();
   for (const r of rows) {
-    L.marker([Number(r.map_latitude),Number(r.map_longitude)], {
-      icon: L.divIcon({className:'',html:'<div class="map-pin"></div>',iconSize:[24,34],iconAnchor:[11,28],popupAnchor:[0,-28]}),
+    const pin = L.marker([Number(r.map_latitude),Number(r.map_longitude)], {
+      icon:L.divIcon({ className:'', html:'<div class="map-pin"></div>', iconSize:[24,34], iconAnchor:[11,28], popupAnchor:[0,-28] }),
       title:clean(r.organisation)
-    }).bindPopup(popupHTML(r),{maxWidth:360}).addTo(markerLayer);
+    }).bindPopup(popupHTML(r), { maxWidth:350 });
+    markerLayer.addLayer(pin);
   }
-  const tb = E('directory-body'); tb.replaceChildren();
-  if (!rows.length) { const tr=tb.insertRow(), td=tr.insertCell();td.colSpan=8;td.textContent='No organisations match the current filters.';return; }
+  const table = E('directory-body');
+  table.replaceChildren();
+  if (!rows.length) {
+    const tr = table.insertRow(); const td = tr.insertCell();
+    td.colSpan = 8; td.textContent = 'No organisations match the current filters.';
+    return;
+  }
   for (const r of rows) {
-    const tr = tb.insertRow();
-    for (const key of ['organisation','city','country','organisation_type','data_focus','tools_used','ai_interests','website']) {
+    const tr = table.insertRow();
+    for (const [key, label] of DIRECTORY_FIELDS) {
       const td = tr.insertCell();
-      if (key==='website') {
-        const url=safeWebURL(r.website);
-        if(url) {const a=document.createElement('a');a.href=url;a.target='_blank';a.rel='noopener noreferrer';a.textContent='Website';td.append(a);}
-      } else td.textContent = clean(r[key]);
+      td.dataset.label = label;
+      if (key === 'website') {
+        const url = safeWebURL(r.website);
+        if (url) {
+          const a = document.createElement('a');
+          a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+          a.textContent = 'Website'; td.append(a);
+        }
+      } else {
+        td.textContent = clean(r[key]);
+      }
     }
   }
 }
 function showError(message) { E('error').hidden = false; E('error').textContent = message; }
-// RFC-style CSV parser: handles commas, quoted text, embedded newlines and escaped double quotes.
-function parseCSV(text) {
-  const fields=[], rows=[];let field='',row=[],quoted=false;
-  text=text.replace(/^\uFEFF/,'');
-  for(let i=0;i<text.length;i++) {
-    const c=text[i];
-    if (c==='"') { if(quoted && text[i+1]==='"'){field+='"';i++;}else quoted=!quoted; }
-    else if(c===',' && !quoted){row.push(field);field='';}
-    else if((c==='\n'||c==='\r')&&!quoted){ if(c==='\r'&&text[i+1]==='\n')i++;row.push(field);field='';if(row.some(x=>x.trim()))rows.push(row);row=[]; }
-    else field+=c;
-  }
-  if(quoted) throw new Error('CSV contains an unclosed quoted field.');
-  row.push(field);if(row.some(x=>x.trim()))rows.push(row);
-  if(!rows.length) throw new Error('CSV is empty.');
-  const headers=rows.shift().map(h=>h.trim().toLowerCase());
-  const required=['organisation','consent_map','show_on_map','organisation_type'];
-  for (const col of required) if(!headers.includes(col)) throw new Error(`Missing column: ${col}`);
-  if(!headers.includes('map_latitude')&&!headers.includes('latitude')) throw new Error('Missing latitude column');
-  if(!headers.includes('map_longitude')&&!headers.includes('longitude')) throw new Error('Missing longitude column');
-  return rows.map(values=>Object.fromEntries(headers.map((k,j)=>[k,values[j]||''])));
-}
-E('search').addEventListener('input',render);
-E('reset').addEventListener('click',()=>{E('search').value='';for(const box of E('type-checkboxes').querySelectorAll('input'))box.checked=true;render();});
-E('csv-upload').addEventListener('change',async e=>{
-  const file=e.target.files?.[0];if(!file)return;
-  try {
-    const records=filterConsent(parseCSV(await file.text()));
-    setData(records,`Showing local CSV: ${file.name} (browser only)`);
-  } catch(err) { showError(`Couldn't read CSV: ${err.message}`); }
+E('search').addEventListener('input', render);
+E('reset').addEventListener('click', () => {
+  E('search').value = '';
+  for (const box of E('type-checkboxes').querySelectorAll('input')) box.checked = true;
+  render();
 });
-(async function load(){
+(async function load() {
   try {
-    const response=await fetch(`./data.json?ts=${Date.now()}`,{cache:'no-store'});
-    if(!response.ok)throw new Error(`HTTP ${response.status}`);
-    const payload=await response.json();
-    if(!Array.isArray(payload.organisations))throw new Error('Unexpected data format');
-    // Current build_data.py emits *only* approved records.
-    setData(payload.organisations,`Last data update: ${new Date(payload.updated_at).toLocaleString()}`);
-  } catch(err) { E('count').textContent='Map data unavailable'; showError(`Unable to load published map data (${err.message}). Use the optional CSV upload as a temporary backup.`); }
+    const response = await fetch(`./data.json?ts=${Date.now()}`, { cache:'no-store' });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const payload = await response.json();
+    if (!Array.isArray(payload.organisations)) throw new Error('Unexpected data format');
+    const updated = payload.updated_at ? new Date(payload.updated_at).toLocaleString() : 'unknown';
+    setData(payload.organisations, `Last data update: ${updated}`);
+  } catch (err) {
+    E('count').textContent = 'Map data unavailable';
+    showError(`Unable to load published map data (${err.message}). Check the GitHub Actions build and deploy logs.`);
+  }
 })();
+// Recalculate Leaflet layout if Notion or the browser changes the embed width.
+if ('ResizeObserver' in window) {
+  new ResizeObserver(() => map.invalidateSize({ animate:false })).observe(E('map'));
+} else {
+  window.addEventListener('resize', () => map.invalidateSize({ animate:false }));
+}
